@@ -1,0 +1,38 @@
+
+# ===========================
+# Fixed Income Risk Dashboard
+# ===========================
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Python virtual environments
+.venv/
+venv/
+.env
+
+# .NET / C# build output
+**/bin/
+**/obj/
+.vs/
+
+# Input datasets
+# Excluded pending redistribution permission review
+DataSource/
+
+# Generated Excel reports and snapshots
+Excel_Template_Output/
+
+# Temporary files
+*.tmp
+*.log
+
+# Windows
+Thumbs.db
+Desktop.ini
