@@ -14,7 +14,8 @@ using ClosedXML.Excel;
 using ClosedXML.Excel.Drawings;
 
 // ====================================================
-// CONFIGURATION
+// V3 CONFIGURATION - reads the existing Task 1 Jupyter snapshot.
+// The source JSON schema has not changed: you can reuse your V2 exporter.
 // ====================================================
 
 string folder =
@@ -56,12 +57,13 @@ var overview = wb.Worksheets.Add("01 Overview");
 var positions = wb.Worksheets.Add("02 Positions");
 var keyrates = wb.Worksheets.Add("03 Key Rates");
 var scenarios = wb.Worksheets.Add("04 VaR Scenarios");
+var stress = wb.Worksheets.Add("05 Stress Lab");
 
 foreach (var ws in wb.Worksheets)
     Theme.Setup(ws, data.AsOf);
 
 // ====================================================
-// 01 OVERVIEW
+// 01 OVERVIEW - top metrics, largest risk positions and audit status.
 // ====================================================
 
 Theme.Banner(
@@ -198,9 +200,12 @@ overview.Cell("F51").Value = "NOT CONFIGURED";
 
 overview.Cell("B52").Value = "P&L Reconciliation";
 overview.Cell("F52").Value = "TASK 3 REQUIRED";
+overview.Cell("B53").Value = "Interactive Stress";
+overview.Cell("F53").FormulaA1 =
+    "HYPERLINK(\"#'05 Stress Lab'!B2\",\"OPEN STRESS LAB\")";
 
 Theme.Info(
-    overview, "B54:L54",
+    overview, "B56:L56",
     "SIMULATED DESK  |  STATIC EOD REPORT  |  NOT LIVE MARKET RISK"
 );
 
@@ -499,10 +504,132 @@ scenarios.Cell("H35").Value =
 
 
 // ====================================================
-// 05 METHODOLOGY & DATA DEFINITIONS
+// 05 STRESS LAB - NATIVE EXCEL WHAT-IF (NO VBA)
+// ====================================================
+// A rates trader changes the scenario dropdown (E9) or the blue custom
+// shock cells (D12:D22). Excel updates the applied curve shocks and the
+// first-order P&L estimate. The current risk ladder is from Task 1.
+// No external price feed, trade execution, recalculated VaR or convexity.
+
+Theme.Banner(stress, "STRESS LAB  /  YIELD CURVE WHAT-IF");
+Theme.Section(stress, "B7:N7", "INTERACTIVE SCENARIOS  |  EDIT BLUE CELLS  |  USD PER BASIS POINT");
+stress.Columns("B:B").Width = 16;
+stress.Columns("C:C").Width = 23;
+stress.Columns("D:E").Width = 20;
+stress.Column("F").Width = 24;
+stress.Column("G").Width = 20;
+stress.Column("H").Width = 3;
+stress.Columns("I:N").Width = 21;
+
+stress.Cell("B9").Value = "ACTIVE SCENARIO";
+stress.Cell("B9").Style.Font.Bold = true;
+stress.Cell("E9").Value = "Parallel +10bp";
+stress.Cell("E9").Style.Fill.BackgroundColor = XLColor.FromHtml("#DBEAFE");
+stress.Cell("E9").Style.Font.FontColor = XLColor.FromHtml("#1455A3");
+stress.Cell("E9").Style.Font.Bold = true;
+stress.Cell("I9").Value = "REPORT DATE";
+stress.Cell("K9").Value = data.AsOf;
+
+string[] shockHeaders = { "TENOR", "DV01 (USD/BP)", "CUSTOM (BP)", "APPLIED (BP)", "P&L IMPACT (USD)", "RISK WEIGHT" };
+for (int k = 0; k < shockHeaders.Length; k++)
+    stress.Cell(11, k + 2).Value = shockHeaders[k];
+Theme.Header(stress, "B11:G11");
+
+// The scenario library is kept as transparent worksheet inputs, not hidden
+// program logic. Preset values can be reviewed or edited below the main table.
+Theme.Section(stress, "I27:N27", "SCENARIO LIBRARY  /  EDITABLE PRESET SHOCKS (BP)");
+string[] presetNames = {
+    "Parallel +10bp", "Parallel -10bp", "Bear Steepener",
+    "Bull Flattener", "Front-End +25bp", "Custom"
+};
+for (int k = 0; k < presetNames.Length; k++)
+    stress.Cell(29, k + 9).Value = presetNames[k];
+Theme.Header(stress, "I29:N29");
+
+// 11 tenor-specific shocks. "Custom" uses the D12:D22 cells instead.
+double[][] presetShock = {
+    new double[] {10,10,10,10,10,10,10,10,10,10,10},
+    new double[] {-10,-10,-10,-10,-10,-10,-10,-10,-10,-10,-10},
+    new double[] {0,0,0,0,2,5,10,15,20,20,20},
+    new double[] {-20,-20,-18,-15,-12,-10,-8,-6,-5,-5,-5},
+    new double[] {25,25,25,25,12.5,0,0,0,0,0,0},
+    new double[] {0,0,0,0,0,0,0,0,0,0,0}
+};
+
+// E9 dropdown refers to a valid on-sheet range. This avoids the Excel
+// cross-sheet list validation limitation and requires no macros.
+stress.Cell("E9").CreateDataValidation().List(stress.Range("I29:N29"));
+stress.Range("D12:D22").CreateDataValidation().Decimal.Between(-300, 300);
+
+for (int k = 0; k < data.Ladder.Count; k++)
+{
+    int row = 12 + k;
+    int libraryRow = 30 + k;
+    var item = data.Ladder[k];
+
+    // SOURCE: Task 1 Key-Rate DV01 in USD for a 1bp yield FALL.
+    stress.Cell(row, 2).Value = item.Tenor;
+    stress.Cell(row, 3).Value = item.Dv01;
+    stress.Cell(row, 3).Style.NumberFormat.Format = Theme.NumberFormat;
+    Theme.RiskColor(stress.Cell(row, 3), item.Dv01);
+
+    // INPUT: trader's custom per-tenor shock, in basis points.
+    stress.Cell(row, 4).Value = 0.0;
+    stress.Cell(row, 4).Style.Fill.BackgroundColor = XLColor.FromHtml("#DBEAFE");
+    stress.Cell(row, 4).Style.Font.FontColor = XLColor.FromHtml("#1455A3");
+    stress.Cell(row, 4).Style.NumberFormat.Format = "+0.0;-0.0;0.0";
+
+    // CALCULATION: choose the selected preset, or a custom input.
+    // INDEX/MATCH references the preset table; no C# or Python rerun needed.
+    stress.Cell(row, 5).FormulaA1 =
+        $"IF($E$9=\"Custom\",D{row},INDEX($I${libraryRow}:$N${libraryRow},1,MATCH($E$9,$I$29:$N$29,0)))";
+    stress.Cell(row, 5).Style.NumberFormat.Format = "+0.0;-0.0;0.0";
+
+    // P&L sign convention: rising yields -> negative P&L for positive DV01.
+    stress.Cell(row, 6).FormulaA1 = $"-C{row}*E{row}";
+    stress.Cell(row, 6).Style.NumberFormat.Format = Theme.MoneyFormat;
+    stress.Cell(row, 7).Value =
+        grossKeyRate == 0 ? 0 : Math.Abs(item.Dv01) / grossKeyRate;
+    stress.Cell(row, 7).Style.NumberFormat.Format = "0.0%";
+    Theme.Stripe(stress, row, 2, 7, k);
+    stress.Row(row).Height = 24;
+
+    // Preset source curves (editable by an analyst for testing).
+    for (int p = 0; p < presetNames.Length; p++)
+    {
+        stress.Cell(libraryRow, 9 + p).Value = presetShock[p][k];
+        stress.Cell(libraryRow, 9 + p).Style.NumberFormat.Format = "+0.0;-0.0;0.0";
+        stress.Cell(libraryRow, 9 + p).Style.Fill.BackgroundColor =
+            XLColor.FromHtml("#F0F5FA");
+    }
+}
+
+stress.Cell("B24").Value = "TOTAL STRESS P&L";
+stress.Cell("C24").Value = netDv01;
+stress.Cell("C24").Style.NumberFormat.Format = Theme.NumberFormat;
+stress.Cell("F24").FormulaA1 = "SUM(F12:F22)";
+stress.Cell("F24").Style.NumberFormat.Format = Theme.MoneyFormat;
+Theme.Total(stress, 24, 2, 7);
+
+// Scenario selection information stays distinct from computed historical VaR.
+stress.Cell("B26").Value = "HOW TO USE";
+stress.Cell("B27").Value = "1. Select a scenario in E9.";
+stress.Cell("B28").Value = "2. For custom shocks, select Custom and edit the blue D12:D22 cells.";
+stress.Cell("B29").Value = "3. Read each tenor's estimated P&L in column F and the total in F24.";
+stress.Cell("B31").Value = "MODEL BOUNDARY";
+stress.Cell("B32").Value = "Linear DV01 only; no convexity or full scenario repricing.";
+stress.Cell("B33").Value = "The stress result does not change the reported daily P&L or historical VaR.";
+stress.Cell("B34").Value = "This workbook is a simulated EOD training tool, not a live trading application.";
+
+// ====================================================
+// 06 METHODOLOGY follows (existing V2 content retained)
 // ====================================================
 
-var guide = wb.Worksheets.Add("05 Methodology");
+// ====================================================
+// 06 METHODOLOGY & DATA DEFINITIONS
+// ====================================================
+
+var guide = wb.Worksheets.Add("06 Methodology");
 
 guide.ShowGridLines = false;
 guide.Style.Font.FontName = "Aptos";
@@ -702,6 +829,22 @@ guide.Range("B29:D29").Style.Font.Bold = true;
 guide.Range("D30:D35").Style.Alignment.WrapText = true;
 guide.SheetView.FreezeRows(7);
 
+// V3: separate historical risk from an editable first-order stress estimate.
+guide.Cell("B38").Value = "INTERACTIVE STRESS LAB";
+guide.Range("B38:D38").Style.Fill.BackgroundColor = XLColor.FromHtml("#244767");
+guide.Range("B38:D38").Style.Font.FontColor = XLColor.White;
+guide.Range("B38:D38").Style.Font.Bold = true;
+guide.Cell("B39").Value = "Input";
+guide.Cell("D39").Value = "Curve shock at each tenor, measured in basis points.";
+guide.Cell("B40").Value = "Scenario P&L";
+guide.Cell("D40").Value = "Negative sum of (Key-Rate DV01 x yield shock).";
+guide.Cell("B41").Value = "Implementation";
+guide.Cell("D41").Value = "Excel dropdown + editable custom cells + INDEX/MATCH formulas; no VBA.";
+guide.Cell("B42").Value = "Limitation";
+guide.Cell("D42").Value = "Linear approximation only. No convexity, changing positions, new market prices or VaR re-estimation.";
+guide.Range("D39:D42").Style.Alignment.WrapText = true;
+guide.Rows(39, 42).Height = 32;
+
 // ====================================================
 // SAVE WORKBOOK
 // ====================================================
@@ -710,18 +853,19 @@ Directory.CreateDirectory(folder);
 
 string destination = Path.Combine(
     folder,
-    $"RatesDesk_DailyRisk_V2_{data.AsOf}.xlsx"
+    $"RatesDesk_RiskWorkstation_V3_{data.AsOf}.xlsx"
 );
 
 wb.SaveAs(destination);
 
-Console.WriteLine("SUCCESS");
+Console.WriteLine("SUCCESS: V3 Risk Workstation (macro-free interactive Stress Lab)");
 Console.WriteLine($"Excel: {destination}");
 Console.WriteLine($"Net DV01: {netDv01:+#,##0;-#,##0;0}");
 Console.WriteLine($"Gross DV01: {grossDv01:N0}");
 Console.WriteLine($"Historical VaR: ${var99:N0}");
 Console.WriteLine($"Positions: {data.Positions.Count}");
 Console.WriteLine($"Scenarios: {data.Scenarios.Count}");
+Console.WriteLine("Stress Lab: 6 selectable scenarios, 11 editable tenor shocks");
 
 
 // ====================================================
@@ -862,39 +1006,37 @@ public static class Theme
 
     public static void Navigation(IXLWorksheet ws)
     {
+        // Navigation looks like buttons, but is entirely macro-free.
+        // HYPERLINK() takes the user to the selected worksheet.
         string[] names = {
-            "01 Overview",
-            "02 Positions",
-            "03 Key Rates",
-            "04 VaR Scenarios"
+            "01 Overview", "02 Positions", "03 Key Rates",
+            "04 VaR Scenarios", "05 Stress Lab", "06 Methodology"
         };
-
-        string[] addresses = {
-            "B5", "E5", "H5", "K5"
-        };
-
         string[] labels = {
-            "OVERVIEW", "POSITIONS", "KEY RATES", "VaR SCENARIOS"
+            "OVERVIEW", "POSITIONS", "KEY RATES",
+            "VaR SCENARIOS", "STRESS LAB", "METHODOLOGY"
         };
-
-        for (int i = 0; i < names.Length; i++)
+        for (int k = 0; k < names.Length; k++)
         {
-            var c = ws.Cell(addresses[i]);
-
-            c.FormulaA1 =
-                $"HYPERLINK(\"#'{names[i]}'!B2\",\"{labels[i]}\")";
-
-            c.Style.Font.Bold = true;
-            c.Style.Font.FontColor = Blue;
-            c.Style.Fill.BackgroundColor = Pale;
-            c.Style.Alignment.Horizontal =
+            int left = 2 + 2 * k;
+            var region = ws.Range(5, left, 5, left + 1);
+            region.Merge();
+            var cell = region.FirstCell();
+            cell.FormulaA1 =
+                $"HYPERLINK(\"#'{names[k]}'!B2\",\"{labels[k]}\")";
+            region.Style.Font.Bold = true;
+            region.Style.Font.FontColor = Blue;
+            region.Style.Fill.BackgroundColor = Pale;
+            region.Style.Alignment.Horizontal =
                 XLAlignmentHorizontalValues.Center;
+            region.Style.Alignment.Vertical =
+                XLAlignmentVerticalValues.Center;
         }
     }
 
     public static void Banner(IXLWorksheet ws, string text)
     {
-        var r = ws.Range("B2:L3");
+        var r = ws.Range("B2:M3");
         r.Merge();
 
         r.FirstCell().Value = text;
