@@ -853,7 +853,7 @@ Directory.CreateDirectory(folder);
 
 string destination = Path.Combine(
     folder,
-    $"RatesDesk_RiskWorkstation_V3_{data.AsOf}.xlsx"
+    $"RatesDesk_DailyRisk_Task1_V3_{data.AsOf}.xlsx"
 );
 
 wb.SaveAs(destination);
